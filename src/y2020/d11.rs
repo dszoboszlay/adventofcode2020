@@ -27,14 +27,162 @@ type Seats = Vec<Field>;
 
 type Occupancy = Vec<bool>;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct Seat {
+    offset: usize,
+    stable_occupied_neighbours_cnt: usize,
+    unstable_neighbours: Vec<usize>
+}
+
+impl Seat {
+    fn add_neighbour(&mut self, n: usize) {
+        self.unstable_neighbours.push(n);
+    }
+
+    fn stabilise_neighbour(&mut self, n: usize, occupied: bool) {
+        if occupied { self.stable_occupied_neighbours_cnt += 1 }
+        self.unstable_neighbours.remove(self.unstable_neighbours.binary_search(&n).unwrap());
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WaitingArea {
-    map: Seats,
-    initial: Occupancy,
-    initial_occupied_cnt: i64,
+    initial: Seats,
     vstep: usize,
     top_left: usize,
     bottom_right: usize,
+}
+
+fn is_seat(c: u8) -> bool {
+    c == 'L' as u8 || c == '#' as u8
+}
+
+impl WaitingArea {
+    fn immediate_neighbours(&self) -> Vec<Option<Seat>> {
+        let mut neighbours: Vec<Option<Seat>> = Vec::new();
+
+        let mut i = self.top_left;
+        while i <= self.bottom_right {
+            if is_seat(self.initial[i]) {
+                let idx = neighbours.len();
+                
+                let mut unstable_neighbours: Vec<usize> = Vec::new();
+                for d in &[self.vstep + 1, self.vstep, self.vstep - 1, 1] {
+                    let j = i - d;
+                    if is_seat(self.initial[j]) {
+                        let j = neighbours.binary_search_by_key(&j, |s| s.as_ref().unwrap().offset).unwrap();
+                        neighbours[j].as_mut().unwrap().add_neighbour(idx);
+                        unstable_neighbours.push(j);
+                    }
+                }
+
+                neighbours.push(Option::Some(Seat {
+                    offset: i,
+                    stable_occupied_neighbours_cnt: 0,
+                    unstable_neighbours: unstable_neighbours
+                }))
+            }
+            i += 1;
+        }
+        neighbours
+    }
+
+    fn extended_neighbours(&self) -> Vec<Option<Seat>> {
+        let mut neighbours: Vec<Option<Seat>> = Vec::new();
+
+        let mut i = self.top_left;
+        while i <= self.bottom_right {
+            if is_seat(self.initial[i]) {
+                let idx = neighbours.len();
+                
+                let mut unstable_neighbours: Vec<usize> = Vec::new();
+                for d in &[self.vstep + 1, self.vstep, self.vstep - 1, 1] {
+                    let mut j = i - d;
+                    while self.initial[j] == '.' as u8 { j -= d; }
+                    if is_seat(self.initial[j]) {
+                        let j = neighbours.binary_search_by_key(&j, |s| s.as_ref().unwrap().offset).unwrap();
+                        neighbours[j].as_mut().unwrap().add_neighbour(idx);
+                        unstable_neighbours.push(j);
+                    }
+                }
+
+                unstable_neighbours.sort();
+                neighbours.push(Option::Some(Seat {
+                    offset: i,
+                    stable_occupied_neighbours_cnt: 0,
+                    unstable_neighbours: unstable_neighbours
+                }))
+            }
+            i += 1;
+        }
+        neighbours
+    }
+
+    fn solve(&self, neighbours: &mut Vec<Option<Seat>>, threshold: usize) -> i64 {
+        let mut buff_a: Vec<bool> = self.initial.iter().filter_map(|&c| {
+            if c == 'L' as u8 { Option::Some(false)
+            } else if c == '#' as u8 { Option::Some(true)
+            } else { Option::None }
+        }).collect();
+        let mut buff_b = buff_a.clone();
+        let mut stable_occupied = 0i64;
+        
+        fn step(neighbours: &mut Vec<Option<Seat>>, curr: &Vec<bool>, next: &mut Vec<bool>, stable_occupied: &mut i64, threshold: usize) -> Option<i64> {
+            let mut changed = false;
+            let mut occupied = 0i64;
+            let mut i = 0usize;
+            while i < curr.len() {
+                match neighbours.get_mut(i).unwrap() {
+                    Option::Some(n) => if curr[i] {
+                        if n.stable_occupied_neighbours_cnt + n.unstable_neighbours.len() < threshold {
+                            // Stays occupied and stabilises
+                            let js = n.unstable_neighbours.clone();
+                            for j in js { neighbours[j].as_mut().unwrap().stabilise_neighbour(i, true) }
+                            neighbours[i] = Option::None;
+                            *stable_occupied += 1;
+                        } else if n.stable_occupied_neighbours_cnt + n.unstable_neighbours.iter().filter(|&&j| { curr[j] }).count() < threshold {
+                            // Stay occupied
+                            occupied += 1;
+                            next[i] = true;
+                        } else {
+                            // Changes to free
+                            next[i] = false;
+                            changed = true;
+                        }
+                    } else {
+                        if n.stable_occupied_neighbours_cnt > 0 {
+                            // Stays free and stabilises
+                            let js = n.unstable_neighbours.clone();
+                            for j in js { neighbours[j].as_mut().unwrap().stabilise_neighbour(i, false) }
+                            neighbours[i] = Option::None;
+                        } else if n.unstable_neighbours.iter().any(|&j| curr[j]) {
+                            // Stays free
+                            next[i] = false;
+                        } else {
+                            // Changes to occupied
+                            next[i] = true;
+                            changed = true;
+                        }
+                    },
+                    Option::None => ()
+                }
+                i = i + 1;
+            }
+
+            if changed { Option::None } else { Option::Some(occupied + *stable_occupied) }
+        }
+
+        loop {
+            match step(&mut *neighbours, &buff_a, &mut buff_b, &mut stable_occupied, threshold) {
+                Option::Some(occupied) => return occupied,
+                Option::None => ()
+            }
+            match step(&mut *neighbours, &buff_b, &mut buff_a, &mut stable_occupied, threshold) {
+                Option::Some(occupied) => return occupied,
+                Option::None => ()
+            }
+        }
+    }
 }
 
 impl FromStr for WaitingArea {
@@ -71,7 +219,6 @@ impl FromStr for WaitingArea {
         Result::Ok(WaitingArea{
             map: map,
             initial: initial,
-            initial_occupied_cnt: initial_occupied_cnt,
             vstep: vstep,
             top_left: top_left,
             bottom_right: bottom_right,
@@ -170,36 +317,12 @@ impl Part for Part2 {
     fn solve(&self) -> i64 { p02(&self.input) }
 }
 
-fn store_neighbour(neighbours: &mut Vec<Index>, i: Index, n: Index) {
-    let mut offset = (i * 8) as usize;
-    while neighbours[offset] != Index::MAX { offset += 1; }
-    neighbours[offset] = n;
-}
-
 fn p01(input: &Input) -> i64 {
-    let offsets = [input.vstep + 1, input.vstep, input.vstep - 1, 1];
-    let mut neighbours: Vec<Index> = vec![Index::MAX; input.initial.len() * 8];
-    let mut i = input.top_left;
-    while i <= input.bottom_right {
-        match input.map[i] {
-            Field::Seat(n) => for offset in offsets.iter() {
-                match input.map[i + offset] {
-                    Field::Seat(m) => {
-                        store_neighbour(&mut neighbours, n, m);
-                        store_neighbour(&mut neighbours, m, n);
-                    },
-                    _ => ()
-                }
-            },
-            _ => ()
-        }
-        i += 1;
-    }
-    input.solve(&neighbours, 4)
+    input.solve(&mut input.immediate_neighbours(), 4)
 }
 
-fn p02(_input: &Input) -> i64 {
-    0
+fn p02(input: &Input) -> i64 {
+    input.solve(&mut input.extended_neighbours(), 5)
 }
 
 pub fn parse(s: String) -> Day {
