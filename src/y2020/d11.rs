@@ -2,83 +2,34 @@ use std::rc::Rc;
 use std::str::FromStr;
 use crate::{Day, Part};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Field {
+    Empty,
+    Padding,
+    FreeSeat(u8),
+    OccupiedSeat(u8)
+}
+
 // The 2D seat map represented as a 1D, line continuous vector with extra padding lines and rows around the actual area
-type Seats = Vec<u8>;
+//
+// For example this map:
+//
+// .L..#
+// ##..L
+//
+// Becomes this vector:
+// 
+// XXXXXX.L..#X##..LXXXXXX
+//
+// Where 'X' is the padding field.
+type Seats = Vec<Field>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WaitingArea {
     initial: Seats,
-    w: usize,
-    h: usize,
     vstep: usize,
     top_left: usize,
     bottom_right: usize,
-}
-
-fn is_seat(c: u8) -> bool {
-    c == 'L' as u8 || c == '#' as u8
-}
-
-impl WaitingArea {
-    fn immediate_neighbours(&self) -> (Vec<u16>, Vec<u8>) {
-        fn add_neighbour(neighbours: &mut Vec<u16>, from: u16, to: u16) {
-            let mut i = (from as usize) << 3;
-            while neighbours[i] < u16::MAX { i += 1; }
-            neighbours[i] = to;
-        }
-
-        let mut neighbours: Vec<u16> = Vec::new();
-        let mut map: Vec<u8> = Vec::new();
-        let mut idxs: Vec<u16> = Vec::new();
-        let def_neighbours = [u16::MAX; 8];
-
-        let mut i = self.top_left;
-        while i <= self.bottom_right {
-            if is_seat(self.initial[i]) {
-                let idx = idxs.len() as u16;
-                neighbours.extend(def_neighbours.iter());
-                
-                for d in [self.vstep + 1, self.vstep, self.vstep - 1, 1].iter() {
-                    let j = i - d;
-                    if is_seat(self.initial[j]) {
-                        let j = j as u16;
-                        let jdx = idxs.binary_search(&j).unwrap() as u16;
-                        
-                        add_neighbour(&mut neighbours, idx, jdx);
-                        add_neighbour(&mut neighbours, jdx, idx);
-                    }
-                }
-
-                idxs.push(i as u16);
-                map.push(((self.initial[i] == '#' as u8) as u8) << 7);
-            }
-            i += 1;
-        }
-
-        (neighbours, map)
-    }
-
-    fn crate_seats(&self) -> Seats {
-        self.initial.to_vec()
-    }
-
-    fn step2(&self, from: &Seats, to: &mut Seats, neighbours: &Vec<(usize, Vec<usize>)>) {
-        for (i, js) in neighbours {
-            if from[*i] == 'L' as u8 {
-                if js.iter().any(|&j| from[j] == '#' as u8) {
-                    to[*i] = 'L' as u8
-                } else {
-                    to[*i] = '#' as u8
-                }
-            } else if from[*i] == '#' as u8 {
-                if js.iter().filter(|&&j| from[j] == '#' as u8).count() >= 5 {
-                    to[*i] = 'L' as u8
-                } else {
-                    to[*i] = '#' as u8
-                }
-            }
-        }
-    }
 }
 
 impl FromStr for WaitingArea {
@@ -86,21 +37,25 @@ impl FromStr for WaitingArea {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let w = s.lines().next().unwrap().len();
         let h = s.lines().count();
-        let vstep = w + 2;
+        let vstep = w + 1;
         let top_left = vstep + 1;
         let bottom_right = w + 1 + vstep * h;
 
-        let mut initial = vec!['X' as u8; (w + 2) * (h + 2)];
+        let mut initial = vec![Field::Padding; (w + 1) * (h + 2) + 1];
         let mut i = top_left;
         for line in s.lines() {
-            initial[i..i+w].as_mut().copy_from_slice(line.as_bytes());
-            i += vstep;
+            for &c in line.as_bytes() {
+                let field = if c == '.' as u8 { Field::Empty }
+                else if c == 'L' as u8 { Field::FreeSeat(0) }
+                else { Field::OccupiedSeat(0) };
+                initial[i] = field;
+                i += 1;
+            }
+            i += 1;
         }
 
         Result::Ok(WaitingArea{
             initial: initial,
-            w: w,
-            h: h,
             vstep: vstep,
             top_left: top_left,
             bottom_right: bottom_right,
@@ -126,73 +81,105 @@ impl Part for Part2 {
     fn solve(&self) -> i64 { p02(&self.input) }
 }
 
-fn solve(neighbours: &Vec<u16>, map: &mut Vec<u8>, threshold: u8) -> i64 {
-    let threshold = threshold + 0x80;
-    loop {
-        let mut unchanged = true;
-        let mut i = 0;
-
-        // Step 1: update number of occupied neighbours
-        while i < map.len() {
-            if map[i] & 0x80u8 == 0x80u8 {
-                let mut j = i << 3;
-                while neighbours[j] < u16::MAX && j < ((i + 1) << 3) {
-                    map[neighbours[j] as usize] += 1;
-                    j += 1;
-                }
-            }
-            i += 1;
+fn step1(from: &mut Seats, to: &mut Seats, top_left: usize, bottom_right: usize, vstep: usize) -> Option<i64> {
+    // In the first buffer: update state
+    // In the second buffer: calculate number of occupied neighbours
+    let neighbours = [vstep + 1, vstep, vstep - 1, 1];
+    let mut unchanged = true;
+    let mut occupied_cnt = 0;
+    let mut i = top_left;
+    while i <= bottom_right {
+        match from[i] {
+            Field::OccupiedSeat(m) => if m < 4 {
+                let cnt = neighbours.iter().filter(|d| {
+                    let j = i - **d;
+                    match to[j] {
+                        Field::OccupiedSeat(n) => {
+                            to[j] = Field::OccupiedSeat(n + 1);
+                            true
+                        },
+                        Field::FreeSeat(n) => {
+                            to[j] = Field::FreeSeat(n + 1);
+                            false
+                        },
+                        _ => false
+                    }
+                }).count();
+                to[i] = Field::OccupiedSeat(cnt as u8);
+                occupied_cnt += 1;
+            } else {
+                let cnt = neighbours.iter().filter(|d| {
+                    let j = i - **d;
+                    match to[j] {
+                        Field::OccupiedSeat(_) => {
+                            true
+                        },
+                        _ => false
+                    }
+                }).count();
+                to[i] = Field::FreeSeat(cnt as u8);
+                unchanged = false;
+            },
+            Field::FreeSeat(m) => if m > 0 {
+                let cnt = neighbours.iter().filter(|d| {
+                    let j = i - **d;
+                    match to[j] {
+                        Field::OccupiedSeat(_) => {
+                            true
+                        },
+                        _ => false
+                    }
+                }).count();
+                to[i] = Field::FreeSeat(cnt as u8)
+            } else {
+                let cnt = neighbours.iter().filter(|d| {
+                    let j = i - **d;
+                    match to[j] {
+                        Field::OccupiedSeat(n) => {
+                            to[j] = Field::OccupiedSeat(n + 1);
+                            true
+                        },
+                        Field::FreeSeat(n) => {
+                            to[j] = Field::FreeSeat(n + 1);
+                            false
+                        },
+                        _ => false
+                    }
+                }).count();
+                to[i] = Field::OccupiedSeat(cnt as u8);
+                occupied_cnt += 1;
+                unchanged = false;
+            },
+            _ => ()
         }
+        i += 1;
+    }
 
-        // Step 2: update state
-        i = 0;
-        while i < map.len() {
-            if map[i] == 0              { map[i] = 0x80; unchanged = false }
-            else if map[i] >= threshold { map[i] = 0;    unchanged = false }
-            else                        { map[i] = map[i] & 0x80;          }
-            i += 1;
-        }
-
-        if unchanged { return map.iter().filter(|&&x| x == 0x80).count() as i64 }
+    if unchanged {
+        Option::Some(occupied_cnt)
+    } else {
+        Option::None
     }
 }
 
 fn p01(input: &Input) -> i64 {
-    let (neighbours, mut map) = input.immediate_neighbours();
-    solve(&neighbours, &mut map, 4)
+    let mut b1 = input.initial.clone();
+    let mut b2 = b1.clone();
+
+    loop {
+        match step1(&mut b1, &mut b2, input.top_left, input.bottom_right, input.vstep) {
+            Option::Some(occupied) => return occupied,
+            Option::None => ()
+        }
+        match step1(&mut b2, &mut b1, input.top_left, input.bottom_right, input.vstep) {
+            Option::Some(occupied) => return occupied,
+            Option::None => ()
+        }
+    }
 }
 
-fn p02(input: &Input) -> i64 {
-    let mut neighbours: Vec<(usize, Vec<usize>)> = Vec::new();
-
-    // Build a lookup map of all neighbours
-    let mut i = input.top_left;
-    while i <= input.bottom_right {
-        if input.initial[i] == 'L' as u8 || input.initial[i] == '#' as u8 {
-            let mut directions = Vec::new();
-            for d in &[1, input.vstep + 1, input.vstep - 1, input.vstep] {
-                let mut j = i + d;
-                while input.initial[j] == '.' as u8 { j += d }
-                if input.initial[j] != 'X' as u8 { directions.push(j) }
-
-                j = i - d;
-                while input.initial[j] == '.' as u8 { j -= d }
-                if input.initial[j] != 'X' as u8 { directions.push(j) }
-            }
-            neighbours.push((i, directions))
-        }
-        i += 1
-    }
-
-    // Run the simulation
-    let mut b1 = input.crate_seats();
-    let mut b2 = input.crate_seats();
-    loop {
-        input.step2(&b1, &mut b2, &neighbours);
-        if b1 == b2 { return b2.iter().filter(|&&c| c == '#' as u8).count() as i64 }
-        input.step2(&b2, &mut b1, &neighbours);
-        if b1 == b2 { return b1.iter().filter(|&&c| c == '#' as u8).count() as i64 }
-    }
+fn p02(_input: &Input) -> i64 {
+    0
 }
 
 pub fn parse(s: String) -> Day {
