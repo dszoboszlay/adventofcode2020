@@ -1,28 +1,9 @@
 use std::rc::Rc;
 use std::str::FromStr;
-use std::time::Instant;
 use crate::{Day, Part};
 
 // The 2D seat map represented as a 1D, line continuous vector with extra padding lines and rows around the actual area
 type Seats = Vec<u8>;
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct Seat {
-    offset: usize,
-    stable_occupied_neighbours_cnt: usize,
-    unstable_neighbours: Vec<usize>
-}
-
-impl Seat {
-    fn add_neighbour(&mut self, n: usize) {
-        self.unstable_neighbours.push(n);
-    }
-
-    fn stabilise_neighbour(&mut self, n: usize, occupied: bool) {
-        if occupied { self.stable_occupied_neighbours_cnt += 1 }
-        self.unstable_neighbours.remove(self.unstable_neighbours.binary_search(&n).unwrap());
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WaitingArea {
@@ -39,101 +20,42 @@ fn is_seat(c: u8) -> bool {
 }
 
 impl WaitingArea {
-    fn immediate_neighbours(&self) -> Vec<Option<Seat>> {
-        let mut neighbours: Vec<Option<Seat>> = Vec::new();
+    fn immediate_neighbours(&self) -> (Vec<u16>, Vec<u8>) {
+        fn add_neighbour(neighbours: &mut Vec<u16>, from: u16, to: u16) {
+            let mut i = (from as usize) << 3;
+            while neighbours[i] < u16::MAX { i += 1; }
+            neighbours[i] = to;
+        }
+
+        let mut neighbours: Vec<u16> = Vec::new();
+        let mut map: Vec<u8> = Vec::new();
+        let mut idxs: Vec<u16> = Vec::new();
+        let def_neighbours = [u16::MAX; 8];
 
         let mut i = self.top_left;
         while i <= self.bottom_right {
             if is_seat(self.initial[i]) {
-                let idx = neighbours.len();
+                let idx = idxs.len() as u16;
+                neighbours.extend(def_neighbours.iter());
                 
-                let mut unstable_neighbours: Vec<usize> = Vec::new();
-                for d in &[self.vstep + 1, self.vstep, self.vstep - 1, 1] {
+                for d in [self.vstep + 1, self.vstep, self.vstep - 1, 1].iter() {
                     let j = i - d;
                     if is_seat(self.initial[j]) {
-                        let j = neighbours.binary_search_by_key(&j, |s| s.as_ref().unwrap().offset).unwrap();
-                        neighbours[j].as_mut().unwrap().add_neighbour(idx);
-                        unstable_neighbours.push(j);
+                        let j = j as u16;
+                        let jdx = idxs.binary_search(&j).unwrap() as u16;
+                        
+                        add_neighbour(&mut neighbours, idx, jdx);
+                        add_neighbour(&mut neighbours, jdx, idx);
                     }
                 }
 
-                neighbours.push(Option::Some(Seat {
-                    offset: i,
-                    stable_occupied_neighbours_cnt: 0,
-                    unstable_neighbours: unstable_neighbours
-                }))
+                idxs.push(i as u16);
+                map.push(((self.initial[i] == '#' as u8) as u8) << 7);
             }
             i += 1;
         }
-        neighbours
-    }
 
-    fn solve(&self, neighbours: &mut Vec<Option<Seat>>, threshold: usize) -> i64 {
-        let t = Instant::now();
-        let mut buff_a: Vec<bool> = self.initial.iter().filter_map(|&c| {
-            if c == 'L' as u8 { Option::Some(false)
-            } else if c == '#' as u8 { Option::Some(true)
-            } else { Option::None }
-        }).collect();
-        let mut buff_b = buff_a.clone();
-        let mut stable_occupied = 0i64;
-        println!("setup      in {:14.3} μs", t.elapsed().as_nanos() as f32 / 1000.0);
-        
-        fn step(neighbours: &mut Vec<Option<Seat>>, curr: &Vec<bool>, next: &mut Vec<bool>, stable_occupied: &mut i64, threshold: usize) -> Option<i64> {
-            let mut changed = false;
-            let mut occupied = 0i64;
-            let mut i = 0usize;
-            while i < curr.len() {
-                match neighbours.get_mut(i).unwrap() {
-                    Option::Some(n) => if curr[i] {
-                        if n.stable_occupied_neighbours_cnt + n.unstable_neighbours.len() < threshold {
-                            // Stays occupied and stabilises
-                            let js = n.unstable_neighbours.clone();
-                            for j in js { neighbours[j].as_mut().unwrap().stabilise_neighbour(i, true) }
-                            neighbours[i] = Option::None;
-                            *stable_occupied += 1;
-                        } else if n.stable_occupied_neighbours_cnt + n.unstable_neighbours.iter().filter(|&&j| { curr[j] }).count() < threshold {
-                            // Stay occupied
-                            occupied += 1;
-                            next[i] = true;
-                        } else {
-                            // Changes to free
-                            next[i] = false;
-                            changed = true;
-                        }
-                    } else {
-                        if n.stable_occupied_neighbours_cnt > 0 {
-                            // Stays free and stabilises
-                            let js = n.unstable_neighbours.clone();
-                            for j in js { neighbours[j].as_mut().unwrap().stabilise_neighbour(i, false) }
-                            neighbours[i] = Option::None;
-                        } else if n.unstable_neighbours.iter().any(|&j| curr[j]) {
-                            // Stays free
-                            next[i] = false;
-                        } else {
-                            // Changes to occupied
-                            next[i] = true;
-                            changed = true;
-                        }
-                    },
-                    Option::None => ()
-                }
-                i = i + 1;
-            }
-
-            if changed { Option::None } else { Option::Some(occupied + *stable_occupied) }
-        }
-
-        loop {
-            match step(&mut *neighbours, &buff_a, &mut buff_b, &mut stable_occupied, threshold) {
-                Option::Some(occupied) => return occupied,
-                Option::None => ()
-            }
-            match step(&mut *neighbours, &buff_b, &mut buff_a, &mut stable_occupied, threshold) {
-                Option::Some(occupied) => return occupied,
-                Option::None => ()
-            }
-        }
+        (neighbours, map)
     }
 
     fn crate_seats(&self) -> Seats {
@@ -204,18 +126,43 @@ impl Part for Part2 {
     fn solve(&self) -> i64 { p02(&self.input) }
 }
 
+fn solve(neighbours: &Vec<u16>, map: &mut Vec<u8>, threshold: u8) -> i64 {
+    let threshold = threshold + 0x80;
+    loop {
+        let mut unchanged = true;
+        let mut i = 0;
+
+        // Step 1: update number of occupied neighbours
+        while i < map.len() {
+            if map[i] & 0x80u8 == 0x80u8 {
+                let mut j = i << 3;
+                while neighbours[j] < u16::MAX && j < ((i + 1) << 3) {
+                    map[neighbours[j] as usize] += 1;
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+
+        // Step 2: update state
+        i = 0;
+        while i < map.len() {
+            if map[i] == 0              { map[i] = 0x80; unchanged = false }
+            else if map[i] >= threshold { map[i] = 0;    unchanged = false }
+            else                        { map[i] = map[i] & 0x80;          }
+            i += 1;
+        }
+
+        if unchanged { return map.iter().filter(|&&x| x == 0x80).count() as i64 }
+    }
+}
+
 fn p01(input: &Input) -> i64 {
-    let t = Instant::now();
-    let mut x = input.immediate_neighbours();
-    println!("neighbours in {:14.3} μs", t.elapsed().as_nanos() as f32 / 1000.0);
-    let t = Instant::now();
-    let res = input.solve(&mut x, 4);
-    println!("solved     in {:14.3} μs", t.elapsed().as_nanos() as f32 / 1000.0);
-    res
+    let (neighbours, mut map) = input.immediate_neighbours();
+    solve(&neighbours, &mut map, 4)
 }
 
 fn p02(input: &Input) -> i64 {
-    let t = Instant::now();
     let mut neighbours: Vec<(usize, Vec<usize>)> = Vec::new();
 
     // Build a lookup map of all neighbours
@@ -236,8 +183,6 @@ fn p02(input: &Input) -> i64 {
         }
         i += 1
     }
-
-    println!("neighbours in {:14.3} μs", t.elapsed().as_nanos() as f32 / 1000.0);
 
     // Run the simulation
     let mut b1 = input.crate_seats();
