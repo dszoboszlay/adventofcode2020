@@ -38,14 +38,14 @@ fn run_year(year: &Year, dir: &str) {
             let t = Instant::now();
             let day = day_parser(input_str);
             let t = t.elapsed().as_nanos();
-            println!("\x1b[33m      y{:04} d{:02} {:18} {:14.3} μs\x1b[0m", year.year, d, "parsing", t as f32 / 1000.0);
+            println!("\x1b[33m      y{:04} d{:02} {:24} {:14.3} μs\x1b[0m", year.year, d, "parsing", t as f32 / 1000.0);
             for (p, (part, expected)) in day.parts.iter().zip(day_sols.iter()).enumerate() {
                 let p = p + 1;
                 let t = Instant::now();
                 let actual = part.solve();
                 let t = t.elapsed().as_nanos();
                 let result = if *expected == actual { "[\x1b[32mOK\x1b[0m] " } else { "\x1b[31m[ERR]" };
-                println!("{} y{:04} d{:02} p{:02} {:14} {:14.3} μs\x1b[0m", result, year.year, d, p, actual, t as f32 / 1000.0)
+                println!("{} y{:04} d{:02} p{:02} {:20} {:14.3} μs\x1b[0m", result, year.year, d, p, actual, t as f32 / 1000.0)
             }
         } else {
             println!("{:?} not found", &input)
