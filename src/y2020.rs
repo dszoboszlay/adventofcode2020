@@ -14,7 +14,7 @@ mod d11;
 mod d12;
 mod d13;
 mod d14;
-// mod d15;
+mod d15;
 // mod d16;
 // mod d17;
 // mod d18;
@@ -43,7 +43,7 @@ pub fn year() -> Year {
                           d12::parse,
                           d13::parse,
                           d14::parse,
-                        //   d15::parse,
+                          d15::parse,
                         //   d16::parse,
                         //   d17::parse,
                         //   d18::parse,
